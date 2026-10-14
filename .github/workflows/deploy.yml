@@ -1,0 +1,68 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches: [main]
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: taskmanager-devops-app
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    outputs:
+      image_uri: ${{ steps.build-image.outputs.image_uri }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build, tag, and push image
+        id: build-image
+        env:
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          IMAGE_URI=$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+          docker build -t $IMAGE_URI ./app
+          docker push $IMAGE_URI
+          docker tag $IMAGE_URI $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          echo "image_uri=$IMAGE_URI" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy to k3s over SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.K3S_HOST }}
+          username: ec2-user
+          key: ${{ secrets.K3S_SSH_PRIVATE_KEY }}
+          script: |
+            export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+            sudo kubectl set image deployment/taskmanager-app \
+              taskmanager-app=${{ needs.build-and-push.outputs.image_uri }} \
+              -n taskmanager
+            sudo kubectl rollout status deployment/taskmanager-app -n taskmanager --timeout=120s
+
+# --- Required GitHub repo secrets (Settings > Secrets and variables > Actions) ---
+# AWS_ACCESS_KEY_ID        - IAM user with ECR push permissions
+# AWS_SECRET_ACCESS_KEY    - matching secret key
+# K3S_HOST                 - public IP of your EC2 instance (terraform output: instance_public_ip)
+# K3S_SSH_PRIVATE_KEY      - private key matching the key_pair_name used in terraform
