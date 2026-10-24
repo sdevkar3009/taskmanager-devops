@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "instance_type" {
   description = "EC2 instance type for the k3s node"
   type        = string
-  default     = "t3.medium" # k3s + mongo needs a bit more than t3.micro's free-tier 1GB RAM
+  default     = "t3.micro" # k3s + mongo needs a bit more than t3.micro's free-tier 1GB RAM
 }
 
 variable "key_pair_name" {
